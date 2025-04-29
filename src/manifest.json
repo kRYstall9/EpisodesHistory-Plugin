@@ -1,0 +1,20 @@
+{
+  "id": "episodeshistory",
+  "name": "Episodes History",
+  "version": "1.0.0",
+  "manifestURI": "",
+  "language": "typescript",
+  "type": "plugin",
+  "description": "A plugin that shows the episodes watch history",
+  "author": "kRYstall9",
+  "icon": "",
+  "website": "",
+  "lang": "multi",
+  "payloadURI": "",
+  "plugin": {
+    "version": "1",
+    "permissions": {
+      "scopes" : ["storage", "anilist"]
+    }
+  }
+}
