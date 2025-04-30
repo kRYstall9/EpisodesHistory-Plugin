@@ -33,7 +33,7 @@ function init() {
 
         const tray = ctx.newTray({
             withContent: true,
-            iconUrl: '',
+            iconUrl: 'https://raw.githubusercontent.com/kRYstall9/EpisodesHistory-Plugin/refs/heads/main/src/icons/double-check.png',
             width: '650px'
         });
 
