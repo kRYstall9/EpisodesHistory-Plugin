@@ -8,38 +8,44 @@ function init() {
 
     $ui.register((ctx) => {
 
-        //States
+        // #region States
         const storedEpisodes = ctx.state<WatchedEpisode[]>([]);
         const currentPage = ctx.state<number>(1);
-        const storageSettings = ctx.state<StorageSettings>({ cacheFor: 30 });
+        const storageSettings = ctx.state<StorageSettings>({ cacheFor: 30});
         const episodesPerPage = ctx.state<number>(5);
+        const sortBy = ctx.state<SortBy>({ date: 'desc' });
+        // #endregion
 
-        //Field Refs
+        // #region Field Refs
         const storageCacheRef = ctx.fieldRef<string>();
         const episodesPerPageRef = ctx.fieldRef<string>();
         const compactViewRef = ctx.fieldRef<boolean>();
+        // #endregion
 
-        //Consts
+        // #region Consts
         const flexItemsGap: number = 33;
         const saveSettings = `onSaveSettings_${new Date().getTime()}`;
         const cancelSettings = `onCancel_${new Date().getTime()}`;
         const clearDataEvent = `clearData_${new Date().getTime()}`;
         const settingsEvent = `settings_${new Date().getTime()}`;
+        const sortByNameEvent = `onSortByName_${new Date().getTime()}`;
+        const sortByDateEvent = `onSortByDate_${new Date().getTime()}`;
         const defaultCacheDays: number = 30;
+        // #endregion
 
-        //Keys
+        // #region Keys
         const episodesStorageKey = 'episodesStorageKey';
         const settingsStorageKey = 'settings';
+        // #endregion
 
         const tray = ctx.newTray({
             withContent: true,
             iconUrl: 'https://raw.githubusercontent.com/kRYstall9/EpisodesHistory-Plugin/refs/heads/main/src/icons/double-check.png',
-            width: '650px'
+            width: '550px'
         });
 
 
-        //Events
-
+        // #region Events
         tray.onOpen(() => {
             const settings = $storage.get<StorageSettings>(settingsStorageKey);
             if (settings == null || (settings && Object.keys(settings).length === 0)) {
@@ -136,14 +142,35 @@ function init() {
             storageSettings.set((prev) => ({ ...prev, compactView: value }));
         })
 
+        ctx.registerEventHandler(sortByNameEvent, () => {
+            sortBy.set((prev) => ({ name: prev.name == 'desc' ? 'asc' : 'desc' }));
+        });
 
-        //Functions
+        ctx.registerEventHandler(sortByDateEvent, () => {
+            sortBy.set((prev) => ({ date: prev.date == 'desc' ? 'asc' : 'desc' }));
+        });
 
+        // #endregion
+
+        // #region Functions
         function createEntries(episodes: WatchedEpisode[], tray: $ui.Tray, itemsPerPage: number, pageNumber: number, gap?: number, style?: Record<string, string>): any {
             const entries: any = [];
+            const settings = storageSettings.get();
+            const compactView = settings.compactView;
+            const sortingKey = Object.keys(sortBy.get())[0];
+            const sorting = sortBy.get()[sortingKey];
 
-            const paginatedEpisodes = getPaginatedItems(episodes, itemsPerPage, pageNumber);
-            const compactView = storageSettings.get().compactView;
+
+            let sortedEntries: WatchedEpisode[] = [];
+
+            sortedEntries = episodes.sort((a, b) => {
+
+                return sortingKey != 'name' ? (new Date((sorting == 'desc' ? b : a).date).getTime() - new Date((sorting == 'desc' ? a : b).date).getTime()) :
+                    ((sorting == 'desc' ? b : a).animeName.toLowerCase().localeCompare((sorting == 'desc' ? a : b).animeName.toLowerCase()));
+
+            });
+
+            const paginatedEpisodes = getPaginatedItems(sortedEntries, itemsPerPage, pageNumber);
 
             for (let episode of paginatedEpisodes) {
 
@@ -154,7 +181,7 @@ function init() {
                     entries.push(
                         tray.div({
                             items: [
-                                tray.text(episode.animeName, { className: `${compactView ? 'truncate' : 'line-clamp-2'}` })
+                                tray.text(episode.animeName, { className: `${compactView ? 'truncate' : 'line-clamp-2 break-normal'}` })
                             ],
                             className: 'col-span-2',
                         }),
@@ -162,14 +189,16 @@ function init() {
                             items: [
                                 tray.text(`Episode: ${episode.episodeNumber.toString()}`)
                             ],
-                            className: 'flex text-center w-full',
+                            className: 'col-span-1 text-center',
                         }),
                         tray.div({
                             items: [
                                 tray.text(finalDate)
                             ],
-                            className: 'flex text-center w-full',
+                            className: 'col-span-1 text-center',
                         }),
+
+
                     )
                 }
                 catch (error) {
@@ -368,7 +397,6 @@ function init() {
                         items: [
                             settingsLayout(true)
                         ],
-                        className: ''
                     });
                 }
                 catch (error: any) {
@@ -381,6 +409,7 @@ function init() {
                 finalItem = tray.div({
                     items: [
                         header('History'),
+                        createSortButtons(storedEpisodes.get()),
                         createEntries(storedEpisodes.get(), tray, episodesPerPage.get(), currentPage.get(), flexItemsGap),
                         pagination(storedEpisodes.get(), tray, episodesPerPage.get())
                     ],
@@ -394,8 +423,9 @@ function init() {
             const hours = padStart(date.getHours());
             const minutes = padStart(date.getMinutes());
             const month = padStart(date.getMonth() + 1);
+            const day = padStart(date.getDate());
 
-            return `${date.getFullYear()}/${month}/${date.getDate()} ${includeTime ? `${hours}:${minutes}` : ''} `.trim();
+            return `${date.getFullYear()}/${month}/${day} ${includeTime ? `${hours}:${minutes}` : ''} `.trim();
         }
 
         function padStart(num: number): string {
@@ -556,8 +586,41 @@ function init() {
             })
         }
 
+        function createSortButtons(episodes: WatchedEpisode []) {
+            return tray.div({
+                items: [
+                    tray.div({
+                        items: [
+                            tray.button({
+                                label: `${sortBy.get()?.name == 'desc' ? '↑' : '↓'}`,
+                                onClick: sortByNameEvent,
+                                className: `px-2 py-1 text-xs border bg-transparent ${episodes.length <= 0 ? 'hidden' : 'block'}`
+                            }),
+                        ],
+                        className: 'col-span-2 flex justify-center'
+                    }),
+                    tray.div({
+                        items: [],
+                        className: 'col-span-1'
+                    }),
+                    tray.div({
+                        items: [
+                            tray.button({
+                                label: `${sortBy.get()?.date == 'desc' ? '↑' : '↓'}`,
+                                onClick: sortByDateEvent,
+                                className: `px-2 py-1 text-xs border bg-transparent ${episodes.length <= 0 ? 'hidden' : 'block'}`
+                            })],
+                        className: 'col-span-1 flex justify-center'
+                    }),
 
-        //Watch
+                ],
+                className: 'grid grid-cols-4 overflow-y-auto gap-3 text-xs w-full'
+            })
+        }
+
+        // #endregion
+
+        // #region Watch
         $store.watch<WatchedEpisode[]>('episodes', (value) => {
             if (!value) {
                 return;
@@ -636,9 +699,9 @@ function init() {
                 createLogMessage('error', 'onPreUpdateEntryProgress', error);
             }
         });
+        // #endregion
 
-
-        //Store Keys
+        // #region Store Keys
         if (!$store.has(episodesStorageKey)) {
             createLogMessage('debug', '$store.has(episodesStorageKey)', 'episodesStorageKey saved in $store');
             $store.set(episodesStorageKey, 'episodes');
@@ -659,8 +722,9 @@ function init() {
 
             $store.set('storedEpisodes', storedEpisodes);
         }
+        // #endregion
 
-        //Storage keys
+        // #region Storage keys
         if ($storage.has('episodes')) {
             createLogMessage('debug', '$storage.has(episodes)', 'Reading episodes from DB');
             const dbEps = $storage.get('episodes');
@@ -675,6 +739,7 @@ function init() {
         if (settings && Object.keys(settings).length === 0) {
             ctx.toast.warning('Not keeping track of the progress. Open the tray and insert the requested values');
         }
+        // #endregion
 
 
         tray.render(() => {
@@ -692,6 +757,7 @@ function init() {
 
 }
 
+// #region Types
 type WatchedEpisode = {
     animeName: string
     episodeNumber: number
@@ -711,3 +777,12 @@ type StoreAnime = {
     animeName: string,
     episodes: Array<$app.Anime_Episode>
 }
+
+type SortBy = {
+
+    name?: 'asc' | 'desc',
+    date?: 'asc' | 'desc'
+
+}
+
+// #endregion
