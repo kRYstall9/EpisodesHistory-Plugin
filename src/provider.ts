@@ -14,12 +14,16 @@ function init() {
         const storageSettings = ctx.state<StorageSettings>({ cacheFor: 30});
         const episodesPerPage = ctx.state<number>(5);
         const sortBy = ctx.state<SortBy>({ date: 'desc' });
+        const isFilterOpen = ctx.state<boolean>(false);
+        const selectedAnimeName = ctx.state<string | undefined>(undefined);
         // #endregion
 
         // #region Field Refs
         const storageCacheRef = ctx.fieldRef<string>();
         const episodesPerPageRef = ctx.fieldRef<string>();
         const compactViewRef = ctx.fieldRef<boolean>();
+        const filterByAnimeNameRef = ctx.fieldRef<string>();
+        const sortByRef = ctx.fieldRef<SortBy>({ date: 'desc' });
         // #endregion
 
         // #region Consts
@@ -30,7 +34,9 @@ function init() {
         const settingsEvent = `settings_${new Date().getTime()}`;
         const sortByNameEvent = `onSortByName_${new Date().getTime()}`;
         const sortByDateEvent = `onSortByDate_${new Date().getTime()}`;
+        const sortByEvent = `onSortBy_${new Date().getTime()}`;
         const defaultCacheDays: number = 30;
+        const openFiltersDiv = `onOpenFiltersDiv_${new Date().getTime()}`;
         // #endregion
 
         // #region Keys
@@ -150,10 +156,19 @@ function init() {
             sortBy.set((prev) => ({ date: prev.date == 'desc' ? 'asc' : 'desc' }));
         });
 
+        ctx.registerEventHandler(openFiltersDiv, () => {
+            isFilterOpen.set((prev) => !prev);
+        })
+
+        filterByAnimeNameRef.onValueChange((value) => {
+            currentPage.set(1);
+            selectedAnimeName.set(value);
+        });
+
         // #endregion
 
         // #region Functions
-        function createEntries(episodes: WatchedEpisode[], tray: $ui.Tray, itemsPerPage: number, pageNumber: number, gap?: number, style?: Record<string, string>): any {
+        function createEntries(episodes: WatchedEpisode[], tray: $ui.Tray, itemsPerPage: number, pageNumber: number, gap?: number, style?: Record<string, string>, filterByAnimeName?: string): any {
             const entries: any = [];
             const settings = storageSettings.get();
             const compactView = settings.compactView;
@@ -169,6 +184,12 @@ function init() {
                     ((sorting == 'desc' ? b : a).animeName.toLowerCase().localeCompare((sorting == 'desc' ? a : b).animeName.toLowerCase()));
 
             });
+
+            if(filterByAnimeName && filterByAnimeName.toLowerCase() != 'all') {
+                sortedEntries = sortedEntries.filter((episode) =>
+                    episode.animeName.toLowerCase().includes(filterByAnimeName.toLowerCase())
+                );
+            }
 
             const paginatedEpisodes = getPaginatedItems(sortedEntries, itemsPerPage, pageNumber);
 
@@ -218,8 +239,18 @@ function init() {
             console[logLevel](`[${logLevel.toString().toUpperCase()}] - [${method}] - ${msg}`);
         }
 
-        function pagination(episodes: WatchedEpisode[], tray: $ui.Tray, itemsPerPage: number) {
-            const totalEpisodesWatched = episodes.length;
+        function pagination(episodes: WatchedEpisode[], tray: $ui.Tray, itemsPerPage: number, filterByAnimeName?: string): any {
+
+            let eps: WatchedEpisode[] = [];
+            if (filterByAnimeName && filterByAnimeName.toLowerCase() != 'all') {
+                eps = episodes.filter((episode) =>
+                    episode.animeName.toLowerCase().includes(filterByAnimeName.toLowerCase())
+                );
+            } else {
+                eps = episodes;
+            }
+
+            const totalEpisodesWatched = eps.length;
             const totalPages = Math.floor(totalEpisodesWatched / itemsPerPage) + (totalEpisodesWatched % itemsPerPage > 0 ? 1 : 0);
             const pageGroup = 3;
             const pages: any = [];
@@ -409,9 +440,10 @@ function init() {
                 finalItem = tray.div({
                     items: [
                         header('History'),
+                        createFilters(storedEpisodes.get()),
                         createSortButtons(storedEpisodes.get()),
-                        createEntries(storedEpisodes.get(), tray, episodesPerPage.get(), currentPage.get(), flexItemsGap),
-                        pagination(storedEpisodes.get(), tray, episodesPerPage.get())
+                        createEntries(storedEpisodes.get(), tray, episodesPerPage.get(), currentPage.get(), flexItemsGap, undefined, selectedAnimeName.get()),
+                        pagination(storedEpisodes.get(), tray, episodesPerPage.get(), selectedAnimeName.get())
                     ],
                     className: 'container flex flex-col content-center m-0 p-0'
                 })
@@ -586,6 +618,62 @@ function init() {
             })
         }
 
+        function createFilters(storedEpisodes: WatchedEpisode[]) {
+            const items: any = [];
+
+            const animeNames = new Set<string>();
+
+            storedEpisodes.forEach(episode => {
+                animeNames.add(episode.animeName);
+            });
+
+            const animeNamesArray = Array.from(animeNames).map(name => ({ label: truncateLabel(name, 50), value: name }));
+
+            return tray.div({
+                items: [
+                    tray.div({
+                        items: [
+                            tray.div({
+                                items: [
+                                    tray.button({
+                                        label: `🔍 Filters ${isFilterOpen.get() ? '△' : '▽'}`,
+                                        intent: 'primary-subtle',
+                                        onClick: openFiltersDiv,
+                                        className: 'text-sm',
+                                    }),
+                                ],
+                                className: 'flex justify-center items-center'
+                            }),
+                            tray.div({
+                                items: [
+                                    ...(isFilterOpen.get() ? [
+                                        tray.select({
+                                            label: 'Anime Name',
+                                            options: [
+                                                { label: 'All', value: 'all' },
+                                                ...animeNamesArray
+                                            ],
+                                            className: `text-sm col-span-3`,
+                                            fieldRef: filterByAnimeNameRef,
+                                            value: selectedAnimeName.get() || ''
+                                        })
+                                    ] : []
+                                    )
+
+                                ],
+                                className: `relative ${isFilterOpen.get() == true ? 'grid' : 'hidden'} grid-cols-3`,
+                            }),
+                        ],
+                        className: 'relative'
+                    })
+                ],
+                className: `mb-4 ${storedEpisodes.length > 0 ? 'block' : 'hidden'}`
+            })
+
+
+
+        }
+
         function createSortButtons(episodes: WatchedEpisode []) {
             return tray.div({
                 items: [
@@ -616,6 +704,10 @@ function init() {
                 ],
                 className: 'grid grid-cols-4 overflow-y-auto gap-3 text-xs w-full'
             })
+        }
+
+        function truncateLabel(label: string, maxLength: number = 30): string {
+            return label.length > maxLength ? label.slice(0, maxLength) + '…' : label;
         }
 
         // #endregion
