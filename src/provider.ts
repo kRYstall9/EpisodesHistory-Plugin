@@ -23,7 +23,6 @@ function init() {
         const episodesPerPageRef = ctx.fieldRef<string>();
         const compactViewRef = ctx.fieldRef<boolean>();
         const filterByAnimeNameRef = ctx.fieldRef<string>();
-        const sortByRef = ctx.fieldRef<SortBy>({ date: 'desc' });
         // #endregion
 
         // #region Consts
@@ -34,9 +33,9 @@ function init() {
         const settingsEvent = `settings_${new Date().getTime()}`;
         const sortByNameEvent = `onSortByName_${new Date().getTime()}`;
         const sortByDateEvent = `onSortByDate_${new Date().getTime()}`;
-        const sortByEvent = `onSortBy_${new Date().getTime()}`;
         const defaultCacheDays: number = 30;
         const openFiltersDiv = `onOpenFiltersDiv_${new Date().getTime()}`;
+        const onUpdateTitlesEvent = `onUpdateTitles_${new Date().getTime()}`;
         // #endregion
 
         // #region Keys
@@ -163,6 +162,122 @@ function init() {
         filterByAnimeNameRef.onValueChange((value) => {
             currentPage.set(1);
             selectedAnimeName.set(value);
+        });
+
+        ctx.registerEventHandler(onUpdateTitlesEvent,  () => {
+            const queryByTitle = `query Media($search: String, $type: MediaType) {
+                                    Media(search: $search, type: $type) {
+                                        id
+                                        title {
+                                            english
+                                            native
+                                            romaji
+                                            userPreferred
+                                        }
+                                    }
+                                }`;
+            
+            const queryById = `query Query($perPage: Int, $page: Int, $idIn: [Int]) {
+                                    Page(perPage: $perPage, page: $page) {
+                                        media(id_in: $idIn) {
+                                            id
+                                            title {
+                                                english
+                                                native
+                                                romaji
+                                                userPreferred
+                                            }
+                                        }
+                                    }
+                                }`;
+
+            const anilistToken = $database.anilist.getToken();
+            
+            const episodes = storedEpisodes.get();
+            const uniqueAnimeNamesToUpdate = new Set<string>();
+            const uniqueAnimeIdsToUpdate = new Set<number>();
+            const anilistResults:any[] = [];
+
+            episodes.forEach(episode => {
+                
+                if(episode.animeId){
+                    uniqueAnimeIdsToUpdate.add(episode?.animeId);
+                }
+                else{
+                    uniqueAnimeNamesToUpdate.add(episode?.animeName);
+                }
+            });
+
+            uniqueAnimeNamesToUpdate.forEach((animeName) => {
+                const queryVariables = {
+                    search: animeName,
+                    type: 'ANIME'
+                };
+                
+                const result = $anilist.customQuery({
+                    query: queryByTitle,
+                    variables: queryVariables
+                }, anilistToken);
+
+                if (result) {
+                    anilistResults.push(result.Media);
+                }
+
+            });
+
+            if(uniqueAnimeIdsToUpdate.size > 0){
+
+                const pagesNeeded = Math.ceil(uniqueAnimeIdsToUpdate.size / 50);
+    
+                for(let page=1; page <= pagesNeeded; page ++){
+                    const queryVariables = {
+                        perPage: 50,
+                        page: page,
+                        idIn: Array.from(uniqueAnimeIdsToUpdate).slice((page - 1) * 50, page * 50)
+                    };
+    
+                    const result = $anilist.customQuery({
+                        query: queryById,
+                        variables: queryVariables
+                    }, anilistToken);
+    
+                    for(let anime of result?.Page?.media){
+                        anilistResults.push(anime);
+                    }
+                }
+            }
+
+            createLogMessage('info', 'onUpdateTitlesEvent', `Updating a total of ${anilistResults.length} titles`);
+
+            if(anilistResults.length > 0){
+                let updatedAnimes:WatchedEpisode[] = [];
+                anilistResults.forEach(anime => {
+                    updatedAnimes = updateEpisodes(episodes, anime.title, (ep)=> {
+
+                        const previousAnimeName = ep.animeName;
+
+                        ep.animeId = anime.id;
+                        ep.animeName = anime.title.userPreferred ?? anime.title.english ?? anime.title.romaji ?? ep.animeName;
+
+                        createLogMessage('info', 'onUpdateTitlesEvent', `Updated title of ${previousAnimeName} to ${ep.animeName} and id to ${anime.id}`);
+
+                        return ep;
+                    });
+                });
+
+                storedEpisodes.set(updatedAnimes);
+                
+                createLogMessage('info', 'onUpdateTitlesEvent', 'Saving changes to the database');
+
+                try{
+                    const episodesStorageKey = $store.get<string>('episodesStorageKey');
+
+                    $storage.set(episodesStorageKey, storedEpisodes.get());
+                }
+                catch(ex){
+                    createLogMessage('error', 'onUpdateTitlesEvent', ex);
+                }
+            }
         });
 
         // #endregion
@@ -593,6 +708,13 @@ function init() {
                                 onClick: clearDataEvent,
                                 disabled: storedEpisodes.get().length <= 0,
                                 className: 'text-xs',
+                            }),
+                            tray.button({
+                                label:'🔄 Update Titles',
+                                intent: 'primary-subtle',
+                                onClick: onUpdateTitlesEvent,
+                                className: 'text-xs',
+                                disabled: storedEpisodes.get().length <= 0,
                             })
                         ],
                         className: 'flex gap-2'
@@ -710,6 +832,17 @@ function init() {
             return label.length > maxLength ? label.slice(0, maxLength) + '…' : label;
         }
 
+        function updateEpisodes(episodes: WatchedEpisode[], animeName: AnimeName, updater: (ep: WatchedEpisode) => WatchedEpisode) {
+            return episodes.map(ep => {
+                if(ep.animeName == animeName.english || ep.animeName == animeName.romaji || ep.animeName == animeName.native || ep.animeName == animeName.userPreferred){
+                    return updater(ep);
+                }
+                return ep;
+            });
+        }
+
+
+
         // #endregion
 
         // #region Watch
@@ -757,7 +890,7 @@ function init() {
                 if (anime != null) {
                     createLogMessage('debug', 'onPreUpdateEntryProgress', 'Anime successfully fetched');
 
-                    const animeName = (anime.title.english ?? anime.title.romaji).replace(/^"(.*)"$/, '$1');
+                    const animeName = (anime.title.userPreferred ?? anime.title.english ?? anime.title.romaji).replace(/^"(.*)"$/, '$1');
                     createLogMessage('debug', 'onPreUpdateEntryProgress', 'Anime Retrieved from the storage');
                     const now = new Date();
                     const watchedDate = formatDate(now);
@@ -853,20 +986,28 @@ function init() {
 type WatchedEpisode = {
     animeName: string
     episodeNumber: number
-    date: string
+    date: string,
+    animeId?: number | null
+}
+
+type AnimeName = {
+    english?: string | null
+    native?: string | null
+    romaji?: string | null
+    userPreferred?: string | null
 }
 
 type LogLevel = "error" | "warn" | "info" | "debug";
 
 type StorageSettings = {
-    cacheFor: number,
+    cacheFor: number
     deletingOn?: string | null
     compactView?: boolean
 }
 
 type StoreAnime = {
-    animeId: number,
-    animeName: string,
+    animeId: number
+    animeName: string
     episodes: Array<$app.Anime_Episode>
 }
 
