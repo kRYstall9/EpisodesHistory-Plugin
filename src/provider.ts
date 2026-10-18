@@ -50,6 +50,62 @@ function init() {
         });
 
 
+        // Resolve anime ids from the cached AniList collection, no network request
+        let localIdsByTitle: Map<string, number> | null = null;
+        function localAnimeId(name: string): number | null {
+            if (!name) return null;
+            if (!localIdsByTitle) {
+                localIdsByTitle = new Map();
+                try {
+                    const lists = $anilist.getAnimeCollection(false)?.MediaListCollection?.lists ?? [];
+                    for (const list of lists) {
+                        for (const entry of list?.entries ?? []) {
+                            const media = entry?.media;
+                            if (!media?.id) continue;
+                            for (const t of [media.title?.userPreferred, media.title?.english, media.title?.romaji, media.title?.native, ...(media.synonyms ?? [])]) {
+                                if (t) localIdsByTitle.set(t.trim().toLowerCase(), media.id);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    createLogMessage('error', 'localAnimeId', error);
+                }
+            }
+            return localIdsByTitle.get(name.trim().toLowerCase()) ?? null;
+        }
+
+        // Fill missing ids locally and persist them, returns true if something changed
+        function fillMissingIdsLocally(episodes: WatchedEpisode[]): boolean {
+            let changed = false;
+            for (const ep of episodes) {
+                if (ep.animeId) continue;
+                const id = localAnimeId(ep.animeName);
+                if (id) { ep.animeId = id; changed = true; }
+            }
+            if (changed) {
+                try {
+                    $storage.set($store.get<string>('episodesStorageKey'), episodes);
+                } catch (error) {
+                    createLogMessage('error', 'fillMissingIdsLocally', error);
+                }
+            }
+            return changed;
+        }
+
+        // Open the anime page when clicking its name
+        const openAnimeHandlers = new Set<number>();
+        function openAnimeHandler(animeId: number): string {
+            const key = `openAnime_${animeId}`;
+            if (!openAnimeHandlers.has(animeId)) {
+                openAnimeHandlers.add(animeId);
+                ctx.registerEventHandler(key, () => {
+                    tray.close();
+                    ctx.screen.navigateTo('/entry', { id: animeId.toString() });
+                });
+            }
+            return key;
+        }
+
         // #region Events
         tray.onOpen(() => {
             const settings = $storage.get<StorageSettings>(settingsStorageKey);
@@ -208,16 +264,30 @@ function init() {
                 }
             });
 
-            uniqueAnimeNamesToUpdate.forEach((animeName) => {
+            // resolve from the cached collection first, then at most 5 AniList searches per click
+            fillMissingIdsLocally(episodes);
+            episodes.forEach(episode => {
+                if (episode.animeId) {
+                    uniqueAnimeNamesToUpdate.delete(episode.animeName);
+                    uniqueAnimeIdsToUpdate.add(episode.animeId);
+                }
+            });
+            const remoteSearchLimit = 5;
+            Array.from(uniqueAnimeNamesToUpdate).slice(0, remoteSearchLimit).forEach((animeName) => {
                 const queryVariables = {
                     search: animeName,
                     type: 'ANIME'
                 };
                 
-                const result = $anilist.customQuery({
-                    query: queryByTitle,
-                    variables: queryVariables
-                }, anilistToken);
+                let result: any = null;
+                try {
+                    result = $anilist.customQuery({
+                        query: queryByTitle,
+                        variables: queryVariables
+                    }, anilistToken);
+                } catch (error) {
+                    createLogMessage('warn', 'onUpdateTitlesEvent', `No AniList match for ${animeName}`);
+                }
 
                 if (result) {
                     anilistResults.push(result.Media);
@@ -307,6 +377,7 @@ function init() {
             }
 
             const paginatedEpisodes = getPaginatedItems(sortedEntries, itemsPerPage, pageNumber);
+            fillMissingIdsLocally(episodes);
 
             for (let episode of paginatedEpisodes) {
 
@@ -317,7 +388,15 @@ function init() {
                     entries.push(
                         tray.div({
                             items: [
-                                tray.text(episode.animeName, { className: `${compactView ? 'truncate' : 'line-clamp-2 break-normal'}` })
+                                episode.animeId
+                                    ? tray.button({
+                                        label: episode.animeName,
+                                        size: 'sm',
+                                        intent: 'gray-subtle',
+                                        onClick: openAnimeHandler(episode.animeId),
+                                        className: `w-full h-auto py-1 justify-start text-left whitespace-normal ${compactView ? 'truncate' : 'line-clamp-2 break-normal'}`,
+                                    })
+                                    : tray.text(episode.animeName, { className: `${compactView ? 'truncate' : 'line-clamp-2 break-normal'}` })
                             ],
                             className: 'col-span-2',
                         }),
